@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
+import torchaudio
 import torchaudio as ta
 from lightning import LightningDataModule
 from torch.utils.data.dataloader import DataLoader
@@ -13,11 +14,17 @@ from matcha.utils.audio import mel_spectrogram
 from matcha.utils.model import fix_len_compatibility, normalize
 from matcha.utils.utils import intersperse
 
+from speechbrain.lobes.features import Fbank
+
 
 def parse_filelist(filelist_path, split_char="|"):
     with open(filelist_path, encoding="utf-8") as f:
         filepaths_and_text = [line.strip().split(split_char) for line in f]
     return filepaths_and_text
+
+
+class TextMelDataModule(LightningDataModule):
+    pass
 
 
 class TextMelDataModule(LightningDataModule):
@@ -161,6 +168,8 @@ class TextMelDataset(torch.utils.data.Dataset):
         random.seed(seed)
         random.shuffle(self.filepaths_and_text)
 
+        self.feat_func = Fbank(n_mels=80)
+
     def get_datapoint(self, filepath_and_text):
         if self.n_spks > 1:
             filepath, spk, text = (
@@ -173,11 +182,20 @@ class TextMelDataset(torch.utils.data.Dataset):
             spk = None
 
         text, cleaned_text = self.get_text(text, add_blank=self.add_blank)
-        mel = self.get_mel(filepath)
+        audio_features, y_raw_length, mel = self.get_mel(filepath)
 
         durations = self.get_durations(filepath, text) if self.load_durations else None
 
-        return {"x": text, "y": mel, "spk": spk, "filepath": filepath, "x_text": cleaned_text, "durations": durations}
+        return {
+            "x": text,
+            "y_feats": audio_features,
+            "y_raw_length": y_raw_length,
+            "y": mel,
+            "spk": spk,
+            "filepath": filepath,
+            "x_text": cleaned_text,
+            "durations": durations,
+        }
 
     def get_durations(self, filepath, text):
         filepath = Path(filepath)
@@ -198,7 +216,18 @@ class TextMelDataset(torch.utils.data.Dataset):
 
     def get_mel(self, filepath):
         audio, sr = ta.load(filepath)
-        assert sr == self.sample_rate
+        target_sr = self.sample_rate
+        if sr != target_sr:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=target_sr)
+            audio = resampler(audio)
+            sampling_rate = target_sr
+
+        if audio.shape[0] == 2:
+            audio = audio.mean(0).unsqueeze(0)
+
+        audio_raw_length = audio.shape[1]
+        audio_features = self.feat_func(audio)
+
         mel = mel_spectrogram(
             audio,
             self.n_fft,
@@ -211,7 +240,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             center=False,
         ).squeeze()
         mel = normalize(mel, self.data_parameters["mel_mean"], self.data_parameters["mel_std"])
-        return mel
+        return audio_features, audio_raw_length, mel
 
     def get_text(self, text, add_blank=True):
         text_norm, cleaned_text = text_to_sequence(text, self.cleaners)
@@ -234,41 +263,60 @@ class TextMelBatchCollate:
 
     def __call__(self, batch):
         B = len(batch)
+
         y_max_length = max([item["y"].shape[-1] for item in batch])
         y_max_length = fix_len_compatibility(y_max_length)
+
+        y_max_raw_length = max([item["y_raw_length"] for item in batch])
+        y_max_raw_length = fix_len_compatibility(y_max_raw_length)
+
+        audio_feats_length = max([item["y_feats"].shape[1] for item in batch])
+        audio_feats_length = fix_len_compatibility(audio_feats_length)
+
         x_max_length = max([item["x"].shape[-1] for item in batch])
         n_feats = batch[0]["y"].shape[-2]
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
+        y_feats = torch.zeros((B, audio_feats_length, 80), dtype=torch.float32)
         x = torch.zeros((B, x_max_length), dtype=torch.long)
         durations = torch.zeros((B, x_max_length), dtype=torch.long)
 
         y_lengths, x_lengths = [], []
+        y_raw_lengths = []
         spks = []
         filepaths, x_texts = [], []
         for i, item in enumerate(batch):
             y_, x_ = item["y"], item["x"]
+            y_feats_ = item["y_feats"]
+            y_raw_length = item["y_raw_length"]
+
+            y_raw_lengths.append((y_raw_length / y_max_raw_length))
             y_lengths.append(y_.shape[-1])
             x_lengths.append(x_.shape[-1])
+
             y[i, :, : y_.shape[-1]] = y_
             x[i, : x_.shape[-1]] = x_
+            y_feats[i, : y_feats_.shape[1], :] = y_feats_
+
             spks.append(item["spk"])
             filepaths.append(item["filepath"])
             x_texts.append(item["x_text"])
             if item["durations"] is not None:
                 durations[i, : item["durations"].shape[-1]] = item["durations"]
 
+        y_raw_lengths = torch.tensor(y_raw_lengths, dtype=torch.float)
+
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)
-        spks = torch.tensor(spks, dtype=torch.long) if self.n_spks > 1 else None
 
         return {
             "x": x,
             "x_lengths": x_lengths,
             "y": y,
             "y_lengths": y_lengths,
-            "spks": spks,
-            "filepaths": filepaths,
-            "x_texts": x_texts,
+            "y_feats": y_feats,
+            "y_raw_lengths": y_raw_lengths,
+            "filepaths": filepaths,  # TODO: delete
+            "x_texts": x_texts,  # TODO: delete
             "durations": durations if not torch.eq(durations, 0).all() else None,
         }

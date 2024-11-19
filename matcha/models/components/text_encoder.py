@@ -383,7 +383,7 @@ class TextEncoder(nn.Module):
                 shape: (batch_size, max_text_length)
             x_lengths (torch.Tensor): text input lengths
                 shape: (batch_size,)
-            spks (torch.Tensor, optional): speaker ids. Defaults to None.
+            spks (torch.Tensor, optional): speaker embeddings. Defaults to None.
                 shape: (batch_size,)
 
         Returns:
@@ -399,8 +399,9 @@ class TextEncoder(nn.Module):
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
         x = self.prenet(x, x_mask)
-        if self.n_spks > 1:
+        if spks is not None:
             x = torch.cat([x, spks.unsqueeze(-1).repeat(1, 1, x.shape[-1])], dim=1)
+                        
         x = self.encoder(x, x_mask)
         mu = self.proj_m(x) * x_mask
 

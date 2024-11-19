@@ -15,13 +15,27 @@ def text_to_sequence(text, cleaner_names):
     Returns:
       List of integers corresponding to the symbols in the text
     """
-    sequence = []
 
-    clean_text = _clean_text(text, cleaner_names)
-    for symbol in clean_text:
-        symbol_id = _symbol_to_id[symbol]
-        sequence += [symbol_id]
-    return sequence, clean_text
+    tokens = []
+    i = 0
+    if isinstance(clean_text, list):
+        clean_text = "".join(clean_text)
+
+    while i < len(clean_text):
+        # Check for multi-character tokens (longest match first)
+        match_found = False
+        for symbol in sorted(_symbol_to_id.keys(), key=len, reverse=True):
+            if clean_text[i:i+len(symbol)] == symbol:
+                tokens.append(_symbol_to_id[symbol])
+                i += len(symbol)
+                match_found = True
+                break
+            
+        if not match_found:
+            tokens.append(0)
+            i += 1
+        # change to tokenization according to ipa
+    return tokens, clean_text
 
 
 def cleaned_text_to_sequence(cleaned_text):

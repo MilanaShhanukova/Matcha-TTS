@@ -25,7 +25,7 @@ critical_logger.setLevel(logging.CRITICAL)
 # now the phonemizer is not initialising at every call
 # Might be less flexible, but it is much-much faster
 global_phonemizer = phonemizer.backend.EspeakBackend(
-    language="en-us",
+    language="ru",
     preserve_punctuation=True,
     with_stress=True,
     language_switch="remove-flags",
@@ -61,6 +61,20 @@ _abbreviations = [
     ]
 ]
 
+import string
+
+def replace_punctuation(text):
+    # Define the punctuation to keep
+    keep_punctuation = {'.', '!', '?', ','}
+    
+    # Create a translation table that maps unwanted punctuation to a comma
+    translation_table = str.maketrans(
+        {p: ',' for p in string.punctuation if p not in keep_punctuation}
+    )
+    
+    # Translate the text using the translation table
+    return text.translate(translation_table)
+
 
 def expand_abbreviations(text):
     for regex, replacement in _abbreviations:
@@ -84,6 +98,7 @@ def basic_cleaners(text):
     """Basic pipeline that lowercases and collapses whitespace without transliteration."""
     text = lowercase(text)
     text = collapse_whitespace(text)
+    text = replace_punctuation(text)
     return text
 
 
@@ -97,11 +112,11 @@ def transliteration_cleaners(text):
 
 def english_cleaners2(text):
     """Pipeline for English text, including abbreviation expansion. + punctuation + stress"""
-    text = convert_to_ascii(text)
-    text = lowercase(text)
-    text = expand_abbreviations(text)
+    # text = convert_to_ascii(text)
+    # text = lowercase(text)
+    # text = expand_abbreviations(text)
     phonemes = global_phonemizer.phonemize([text], strip=True, njobs=1)[0]
-    phonemes = collapse_whitespace(phonemes)
+    # phonemes = collapse_whitespace(phonemes)
     return phonemes
 
 
