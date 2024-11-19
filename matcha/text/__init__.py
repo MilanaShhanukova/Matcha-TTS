@@ -18,8 +18,8 @@ def text_to_sequence(text, cleaner_names):
 
     tokens = []
     i = 0
-    if isinstance(clean_text, list):
-        clean_text = "".join(clean_text)
+    if isinstance(text, list):
+        clean_text = "".join(text)
 
     while i < len(clean_text):
         # Check for multi-character tokens (longest match first)
